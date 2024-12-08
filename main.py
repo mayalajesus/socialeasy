@@ -1,13 +1,31 @@
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from schemas import PlatformUsers
 from api_client import APIData
-from parse import normalize_data, merge_platforms
 from dotenv import load_dotenv
 import os
+import pandas as pd
+from parse import normalize_data
 
 load_dotenv()
-
 app = FastAPI()
+
+# Configurar CORS
+origins = [
+    "http://127.0.0.1:5500",  # URL do frontend
+]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,  # Permitir apenas as origens especificadas
+    allow_credentials=True,
+    allow_methods=["*"],  # Permitir todos os métodos (GET, POST, etc.)
+    allow_headers=["*"],  # Permitir todos os cabeçalhos
+)
+# Endpoint de teste
+@app.get("/")
+async def root():
+    return {"message": "active API"}
 
 @app.post("/update")
 async def fetch_data(platform_users: PlatformUsers):
@@ -61,24 +79,31 @@ async def fetch_data(platform_users: PlatformUsers):
     api_data = APIData(token, platforms_config)
     api_data.generate_snapshots()
 
-    headers = {"Authorization": f"Bearer {token}"}
-    dataframes = {}
+    final_data = []
+    for platform_name, config in platforms_config.items():
+        if platform_name in api_data.snapshots:
+            try:
+                # Obtém os dados do snapshot
+                raw_data = api_data.get_snapshot_data(
+                    api_data.snapshots[platform_name],
+                    headers={"Authorization": f"Bearer {token}"}
+                )
+                # Normaliza os dados usando as configurações da plataforma
+                normalized_data = normalize_data(
+                    raw_data,
+                    platform_name,
+                    config["rename_columns"]
+                )
+                final_data.append(normalized_data)
+            except Exception as e:
+                print(f"Erro ao processar dados de {platform_name}: {e}")
 
-    for platform, config in platforms_config.items():
-        if platform in api_data.snapshots:
-            snapshot_id = api_data.snapshots[platform]
-            raw_data = api_data.get_snapshot_data(snapshot_id, headers)
-            normalized_data = normalize_data(raw_data, platform, config["rename_columns"])
-            dataframes[platform] = normalized_data
-
-    final_data = merge_platforms(dataframes)
-
-    # **Tratamento de valores inválidos no DataFrame**
-    if final_data.empty:
+    if final_data:
+        # Concatena os DataFrames normalizados
+        final_data = pd.concat(final_data, ignore_index=True)
+        # Substitui valores inválidos antes de retornar o JSON
+        final_data = final_data.replace([float('inf'), -float('inf')], 0)  # Substitui infinitos por 0
+        final_data = final_data.fillna(0)  # Substitui NaN por 0
+        return final_data.to_dict(orient="records")
+    else:
         return {"message": "Nenhum dado retornado."}
-    
-    # Substituindo valores inválidos por strings aceitáveis
-    final_data = final_data.fillna("N/A")  # Substitui NaN por 'N/A'
-    final_data.replace([float("inf"), -float("inf")], 0, inplace=True)  # Substitui infinitos por 0
-
-    return final_data.to_dict(orient="records")
