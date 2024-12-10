@@ -12,7 +12,7 @@ app = FastAPI()
 
 # Configurar CORS
 origins = [
-    "http://127.0.0.1:5500",  # URL do frontend
+    "http://127.0.0.1:5501",  # URL do frontend
 ]
 
 app.add_middleware(
@@ -33,6 +33,7 @@ async def fetch_data(platform_users: PlatformUsers):
     if not token:
         raise HTTPException(status_code=500, detail="Token não configurado.")
 
+    # Configurações das plataformas
     platforms_config = {
         "instagram": {
             "users": platform_users.instagram,
@@ -76,6 +77,13 @@ async def fetch_data(platform_users: PlatformUsers):
         },
     }
 
+    # Filtra apenas as plataformas com usuários enviados
+    platforms_config = {k: v for k, v in platforms_config.items() if v["users"]}
+
+    if not platforms_config:
+        return {"message": "Nenhuma plataforma foi requisitada."}
+
+    # Inicializa a API com as configurações filtradas
     api_data = APIData(token, platforms_config)
     api_data.generate_snapshots()
 
